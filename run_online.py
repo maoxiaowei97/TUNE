@@ -26,6 +26,7 @@ class Online_inference:
         self.device = device
         self.dataset = dataset
         self.rho = args.rho
+        self.args = args
         self.early_stop = args.early_stop
         if os.path.exists(args.best_model_path):
             self.model.load_state_dict(torch.load(args.best_model_path))
@@ -50,14 +51,13 @@ class Online_inference:
         for idx, row in df.iterrows():
             sub_idx = row['sub_traj_idx']
             if sub_idx == 1:
-                remain_seg_num = row['route_segment_num']
                 remaining_total_segment_num = row['route_segment_num']
                 last_remain_segment_num = row['route_segment_num']
                 """
                 input of route travel time predictor
                 """
                 route_full = torch.stack([torch.LongTensor(row['route_full'])])
-                route_segment_travel_time_mean = np.array(row['estimated_route_segment_travel_time_distribution'])[:, -1][:remain_seg_num]
+                route_segment_travel_time_mean = np.array(row['estimated_route_segment_travel_time_distribution'])[:, -1][:remaining_total_segment_num]
                 route_segment_num = row['route_segment_num']
                 start_ts = torch.LongTensor([row['start_ts']])
                 segment_travel_time_label = torch.stack([torch.FloatTensor(row['segment_travel_time_label'])])
@@ -76,7 +76,7 @@ class Online_inference:
                                                                                                              total_duration,
                                                                                                              self.device)
                 last_pred_segment_for_remaining_route = pred_segment_mean.squeeze(0).squeeze(-1)
-                last_predict_segments_mean = last_pred_segment_for_remaining_route[:remain_seg_num]
+                last_predict_segments_mean = last_pred_segment_for_remaining_route[:remaining_total_segment_num]
                 last_predict_segments_cov = cov[0]
 
                 last_segment_condition_at_departure = route_segment_travel_time_mean
@@ -84,8 +84,8 @@ class Online_inference:
                 current_segment_condition = np.sum(route_segment_travel_time_mean)
 
                 # Compute initial intervals
-                Cov_1 = last_predict_segments_cov[:remain_seg_num, :remain_seg_num]
-                w_1 = torch.ones(remain_seg_num, dtype=torch.float32).to(self.device)
+                Cov_1 = last_predict_segments_cov[:remaining_total_segment_num, :remaining_total_segment_num]
+                w_1 = torch.ones(remaining_total_segment_num, dtype=torch.float32).to(self.device)
                 mean_sum_1 = w_1 @ last_predict_segments_mean
                 var_sum_1 = w_1 @ Cov_1 @ w_1
                 std_sum_1 = torch.sqrt(var_sum_1)
@@ -194,25 +194,24 @@ class Online_inference:
 
         return results
 
-
     def run_online(self):
         local_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         print('local time: ', local_time)
 
-        pickle_file_path = ws + '/data/train_val_test_0505_sub.npz'
+        pickle_file_path = ws + '/data/train_val_test_sub.npz'
         data_to_load = np.load(pickle_file_path, allow_pickle=True)
         print('loaded train_val_test_held data: ', pickle_file_path)
         test_data = data_to_load['test'].item()
 
-        df = pd.DataFrame({ 'traj_id': test_data['traj_id'][3:],
-        'sub_traj_idx': test_data['sub_traj_idx'][3:],
-        'total_duration': test_data['total_duration'][3:],
-        'segment_travel_time_label': test_data['segment_travel_time_label'][3:],
-        'start_ts': test_data['start_ts'][3:],
-        'start_day': test_data['start_day'][3:],
-        'route_segment_num': test_data['route_segment_num'][3:],
-        'route_full':  [list(x) for x in test_data['route_full'][3:]],
-        'estimated_route_segment_travel_time_distribution': [list(x) for x in test_data['estimated_route_segment_travel_time_distribution'][3:]]
+        df = pd.DataFrame({ 'traj_id': list(test_data['traj_id']),
+        'sub_traj_idx': list(test_data['sub_traj_idx']),
+        'total_duration': list(test_data['total_duration']),
+        'segment_travel_time_label': list(test_data['segment_travel_time_label']),
+        'start_ts': list(test_data['start_ts']),
+        'start_day': list(test_data['start_day']),
+        'route_segment_num': list(test_data['route_segment_num']),
+        'route_full':  [list(x) for x in test_data['route_full'][:]],
+        'estimated_route_segment_travel_time_distribution': [list(x) for x in test_data['estimated_route_segment_travel_time_distribution'][:]]
         })
         grouped = df.groupby('traj_id')
 
@@ -228,17 +227,14 @@ class Online_inference:
         mean_all = np.zeros(len(df))
         true_time_all = np.zeros(len(df))
 
-        beta = 0.23
         num_workers = 5
-        z_90 = dist.Normal(0, 1).icdf(torch.tensor([1.0 - (1.0 - 0.9) / 2]))[0].item()
+        z_90 = dist.Normal(0, 1).icdf(torch.tensor([1.0 - (1.0 - self.args.c_f) / 2]))[0].item()
         tasks = []
-        mp.set_start_method('spawn', force=True)  # Use spawn start method for CUDA compatibility
+        mp.set_start_method('spawn', force=True)
 
         for traj_id, group in grouped:
-            tasks.append((traj_id, group, beta, z_90))
+            tasks.append((traj_id, group, self.args.beta, z_90))
 
-        # result = self.process_trajectory(tasks[1])
-        # c = result
         with mp.Pool(processes=num_workers, initializer=worker_init_fn) as pool:
             results_iter = pool.map(self.process_trajectory, tasks)
 
@@ -276,7 +272,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(1)
     parser = get_argparser()
     args = parser.parse_args()
-    save_time = f'checkpoint_t{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}'
+    save_time = f'{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}'
 
     if args.device == "default":
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
