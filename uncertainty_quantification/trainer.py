@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 class Dataset_list(Dataset):
     def __init__(self, route_full, estimated_route_segment_travel_time_distribution, start_ts,
-                 start_day, route_segment_num, total_duration, segment_travel_time_label,  traj_id, sub_traj_idx, duration_from_last_estimate):
+                 start_day, route_segment_num, total_duration, segment_travel_time_label,  traj_id, sub_traj_idx):
         # 初始化所有字段
         self.route_full = route_full
         self.estimated_route_segment_travel_time_distribution = estimated_route_segment_travel_time_distribution
@@ -19,7 +19,6 @@ class Dataset_list(Dataset):
         self.segment_travel_time_label = segment_travel_time_label
         self.traj_id = traj_id
         self.sub_traj_idx = sub_traj_idx
-        self.duration_from_last_estimate = duration_from_last_estimate
 
     def __len__(self):
         # 返回数据集的长度，假设所有字段长度相同
@@ -28,14 +27,14 @@ class Dataset_list(Dataset):
     def __getitem__(self, idx):
         return (self.route_full[idx], self.estimated_route_segment_travel_time_distribution[idx], self.start_ts[idx],
                 self.start_day[idx], self.route_segment_num[idx], self.total_duration[idx], self.segment_travel_time_label[idx],
-                self.traj_id[idx], self.sub_traj_idx[idx],  self.duration_from_last_estimate[idx])
+                self.traj_id[idx], self.sub_traj_idx[idx])
 
 
 def collate_fn_list(batch):
 
     (route_full, route_segment_travel_time_distribution,
      start_ts, start_day, route_segment_num, total_duration, segment_travel_time_label, traj_id,
-     sub_traj_idx, duration_from_last_estimate) = zip(*batch)
+     sub_traj_idx) = zip(*batch)
 
     route_full = torch.tensor(route_full).long()
     route_segment_travel_time_distribution = torch.tensor(route_segment_travel_time_distribution, dtype=torch.float32)
@@ -47,12 +46,11 @@ def collate_fn_list(batch):
     segment_travel_time_label = torch.tensor(segment_travel_time_label, dtype=torch.float32)
     traj_id = torch.tensor(traj_id, dtype=torch.long)
     sub_traj_idx = torch.tensor(sub_traj_idx, dtype=torch.long)
-    duration_from_last_estimate = torch.tensor(duration_from_last_estimate, dtype=torch.float32)
 
 
     return (route_full, route_segment_travel_time_distribution,\
             start_ts, start_day, route_segment_num,\
-             total_duration, segment_travel_time_label, traj_id, sub_traj_idx, duration_from_last_estimate)
+             total_duration, segment_travel_time_label, traj_id, sub_traj_idx)
 
 def dir_check(path):
     import os
@@ -72,7 +70,7 @@ class Trainer:
         print('local time: ', local_time)
         optimizer = torch.optim.Adam(self.model.parameters(), args.lr)
 
-        pickle_file_path = ws + '/data/train_val_test_0505_sub.npz'
+        pickle_file_path = ws + '/data/train_val_test_0507.npz'
         data_to_load = np.load(pickle_file_path, allow_pickle=True)
         print('loaded train_val_test_held data: ', pickle_file_path)
 
@@ -99,19 +97,19 @@ class Trainer:
 
         traindataset = Dataset_list(train_data['route_full'], train_data['estimated_route_segment_travel_time_distribution'],
                                     train_data['start_ts'], train_data['start_day'], train_data['route_segment_num'],  train_data['total_duration'], train_data['segment_travel_time_label'],
-                                    train_data['traj_id'], train_data['sub_traj_idx'],  train_data['duration_from_last_estimate'])
+                                    train_data['traj_id'], train_data['sub_traj_idx'])
 
         traindataloader = DataLoader(traindataset, batch_size=128, shuffle=False, collate_fn=collate_fn_list, drop_last=True)
 
         valdataset = Dataset_list(val_data['route_full'], val_data['estimated_route_segment_travel_time_distribution'],
                                     val_data['start_ts'], val_data['start_day'], val_data['route_segment_num'],  val_data['total_duration'], val_data['segment_travel_time_label'],
-                                    val_data['traj_id'], val_data['sub_traj_idx'], val_data['duration_from_last_estimate'])
+                                    val_data['traj_id'], val_data['sub_traj_idx'])
 
         valdataloader = DataLoader(valdataset, batch_size=128, shuffle=False, collate_fn=collate_fn_list,  drop_last=True)
 
         testdataset = Dataset_list(test_data['route_full'], test_data['estimated_route_segment_travel_time_distribution'],
                                     test_data['start_ts'], test_data['start_day'], test_data['route_segment_num'],  test_data['total_duration'], test_data['segment_travel_time_label'],
-                                    test_data['traj_id'], test_data['sub_traj_idx'],  test_data['duration_from_last_estimate'])
+                                    test_data['traj_id'], test_data['sub_traj_idx'])
 
         testdataloader = DataLoader(testdataset, batch_size=128, shuffle=False, collate_fn=collate_fn_list,  drop_last=True)
 
@@ -127,7 +125,7 @@ class Trainer:
                  start_ts,
                  start_day,
                  route_segment_num,
-                 total_duration, segment_travel_time_label, traj_id, sub_traj_idx, duration_from_last_estimate) = batch
+                 total_duration, segment_travel_time_label, traj_id, sub_traj_idx) = batch
                 loss, predict_mean, valid_segment_mean, batch_covs, pred_lower, pred_upper = self.model(route_full, route_segment_travel_time_distribution, route_segment_num, start_ts,
                                                  segment_travel_time_label, total_duration, self.device)
                 mis_loss = loss_fn(predict_mean.reshape(-1), pred_lower, pred_upper, total_duration.reshape(-1).float().to(self.device))
@@ -151,7 +149,7 @@ class Trainer:
                          start_ts,
                          start_day,
                          route_segment_num,
-                         total_duration, segment_travel_time_label, traj_id, sub_traj_idx, duration_from_last_estimate) = batch
+                         total_duration, segment_travel_time_label, traj_id, sub_traj_idx) = batch
                         loss, predict_mean, valid_segment_mean, batch_covs, pred_lower, pred_upper = self.model.test(route_full, route_segment_travel_time_distribution,
                                                         route_segment_num, start_ts,
                                                         segment_travel_time_label, total_duration, self.device)
@@ -203,8 +201,7 @@ class Trainer:
                  start_ts,
                  start_day,
                  route_segment_num,
-                 total_duration, segment_travel_time_label, traj_id, sub_traj_idx,
-                 duration_from_last_estimate) = batch
+                 total_duration, segment_travel_time_label, traj_id, sub_traj_idx) = batch
                 loss, predict_mean, valid_segment_mean, batch_covs, pred_lower, pred_upper = self.model.test(route_full,
                                                                                                         route_segment_travel_time_distribution,
                                                                                                         route_segment_num,
