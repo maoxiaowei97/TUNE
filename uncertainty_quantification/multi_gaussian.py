@@ -34,7 +34,6 @@ class MAPEWithZeroMaskingLoss(nn.Module):
         masked_predict = predict[mask]
         masked_label = label[mask]
 
-        # 计算 MAPE
         loss = torch.abs((masked_predict - masked_label) / masked_label)
         return loss.mean()
 
@@ -43,20 +42,19 @@ class MGUQ_network(torch.nn.Module):
     def __init__(self, args):
         super(MGUQ_network, self).__init__()
 
-        id_embed_dim = 20
-        slice_dims = 721
-        slice_embed_dim = 20
+        id_embed_dim = args.id_embed_dim
+        slice_dims = args.slice_dim
+        slice_embed_dim =  args.id_embed_dim
         mlp_out_dim = args.E_U
-        n_embed = 256
-        segment_dims =  12691 + 2
-        node_dims = 4600 + 1
-        self.n_samples = args.n_samples
+        n_embed = args.E_U
+        segment_dims =  args.segment_dim
+
         self.dropout = args.dropout
         self.hidden_dim = args.E_U
         self.distribution_embed = nn.Linear(36, n_embed)
+        self.c_f = args.c_f
 
         self.segment_embedding = nn.Embedding(segment_dims, id_embed_dim)
-        self.node_embedding = nn.Embedding(node_dims, id_embed_dim)
 
         self.slice_embedding = nn.Embedding(slice_dims, slice_embed_dim)
         self.all_mlp = nn.Sequential(
@@ -65,7 +63,7 @@ class MGUQ_network(torch.nn.Module):
             nn.Linear(mlp_out_dim, mlp_out_dim),
         )
         self.dec_segment_mean = nn.Linear(self.hidden_dim, 1)
-        self.lstm_segment_mean = nn.LSTM(input_size=self.hidden_dim, hidden_size=self.hidden_dim, num_layers=1, batch_first=True, dropout=self.dropout)
+        self.gru = nn.GRU(input_size=self.hidden_dim, hidden_size=self.hidden_dim, num_layers=1, batch_first=True, dropout=self.dropout) # GRU
         self.dec_segment_diag = nn.Linear(self.hidden_dim, 1)
         self.dec_low_rank = nn.Linear(self.hidden_dim, 16)
         self.mape_loss = MAPEWithZeroMaskingLoss()
@@ -80,7 +78,7 @@ class MGUQ_network(torch.nn.Module):
         all_input = torch.cat([all_id_embedding, all_slice_embedding, all_real], dim=2)
         recurrent_input = self.all_mlp(all_input)
         packed_all_input = pack_padded_sequence(recurrent_input, number_of_roadsegments.reshape(-1).cpu(), enforce_sorted=False, batch_first=True)
-        out_segment, _ = self.lstm_segment_mean(packed_all_input)
+        out_segment, _ = self.gru(packed_all_input)
         out_segment, _ = pad_packed_sequence(out_segment, batch_first=True)
 
         # decode mean and var of each segment
@@ -92,7 +90,7 @@ class MGUQ_network(torch.nn.Module):
         log_probs = []
         lower_list = []
         upper_list = []
-        confidence = 0.9
+        confidence = self.c_f
         alpha = 1.0 - confidence
         z = dist.Normal(0, 1).icdf(torch.tensor([1.0 - alpha / 2]))[0].item()
         for b in range(B):
@@ -106,8 +104,7 @@ class MGUQ_network(torch.nn.Module):
             V = factor_b  # no restriction, can be negative/positive
             # Build Cov_b = diag(D) + V V^T + eps*I
             Cov_b = torch.diag(D) + V @ V.transpose(0, 1)  # shape (n,n)
-            eps = 1e-5
-            Cov_b = Cov_b + torch.eye(n, device=Cov_b.device) * eps
+            Cov_b = Cov_b + torch.eye(n, device=Cov_b.device) * (1e-5)
             mvn_b = dist.MultivariateNormal(loc=mean_b, covariance_matrix=Cov_b)
             label_b = segment_travel_time_label[b, :n]
             log_p_b = mvn_b.log_prob(label_b.to(device))  # shape ()
@@ -137,6 +134,7 @@ class MGUQ_network(torch.nn.Module):
 
         return loss_path_eta  + loss_mean_segments + nll , predict_mean, segments_mean, batch_covs, torch.stack(lower_list, dim=0).reshape(-1), torch.stack(upper_list, dim=0).reshape(-1)
 
+
     def test(self, xs, route_segment_travel_time_distribution, number_of_roadsegments, start_ts,
                 segment_travel_time_label, total_duration, device):
         all_id_embedding = self.segment_embedding(xs.to(device))
@@ -148,7 +146,7 @@ class MGUQ_network(torch.nn.Module):
 
         packed_all_input = pack_padded_sequence(recurrent_input, number_of_roadsegments.reshape(-1).cpu(),
                                                 enforce_sorted=False, batch_first=True)
-        out_segment, _ = self.lstm_segment_mean(packed_all_input)
+        out_segment, _ = self.gru(packed_all_input)
         out_segment, _ = pad_packed_sequence(out_segment, batch_first=True)
 
         # decode mean and var of each segment
@@ -160,7 +158,7 @@ class MGUQ_network(torch.nn.Module):
         log_probs = []
         lower_list = []
         upper_list = []
-        confidence = 0.9
+        confidence = self.c_f
         alpha = 1.0 - confidence
         z = dist.Normal(0, 1).icdf(torch.tensor([1.0 - alpha / 2]))[0].item()
         for b in range(B):
@@ -174,8 +172,7 @@ class MGUQ_network(torch.nn.Module):
             V = factor_b  # no restriction, can be negative/positive
             # Build Cov_b = diag(D) + V V^T + eps*I
             Cov_b = torch.diag(D) + V @ V.transpose(0, 1)  # shape (n,n)
-            eps = 1e-5
-            Cov_b = Cov_b + torch.eye(n, device=Cov_b.device) * eps
+            Cov_b = Cov_b + torch.eye(n, device=Cov_b.device) * (1e-5)
             mvn_b = dist.MultivariateNormal(loc=mean_b, covariance_matrix=Cov_b)
             label_b = segment_travel_time_label[b, :n]
             log_p_b = mvn_b.log_prob(label_b.to(device))  # shape ()
@@ -206,5 +203,6 @@ class MGUQ_network(torch.nn.Module):
         log_probs = torch.stack(log_probs, dim=0)
         nll = -log_probs.mean()
 
-        return loss_path_eta * 2 + loss_mean_segments + nll * 5, predict_mean, segments_mean, batch_covs, torch.stack(
+        return loss_path_eta  + loss_mean_segments + nll , predict_mean, segments_mean, batch_covs, torch.stack(
             lower_list, dim=0).reshape(-1), torch.stack(upper_list, dim=0).reshape(-1)
+
