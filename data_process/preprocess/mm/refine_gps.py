@@ -8,7 +8,7 @@ from tqdm import tqdm
 import math
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from loader.preprocess.mm.utils import gcj02_to_wgs84
+from data_process.preprocess.mm.utils import gcj02_to_wgs84
 
 
 # 用于进程间共享的统计变量
