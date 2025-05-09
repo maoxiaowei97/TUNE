@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 plt.switch_backend("agg")
-from loader.preprocess.mm.refine_gps import get_trajectories
+from data_process.preprocess.mm.refine_gps import get_trajectories
 from leuvenmapmatching.matcher.distance import DistanceMatcher
 from leuvenmapmatching.map.inmem import InMemMap
 import multiprocessing
