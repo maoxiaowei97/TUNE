@@ -3,10 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-"""
-seperate mean and distribution
-"""
-
 
 def create_projection_matrix(m, d, seed=0, scaling=0, struct_mode=True):
     nb_full_blocks = int(m/d)
@@ -214,7 +210,7 @@ class LGDE(nn.Module):
         self.dropout = args.dropout
         self.activation = nn.ReLU()
 
-        self.time_num = 30 * 24 + 1
+        self.time_num = args.time_num
         self.week_num = args.week_num + 1
 
         self.ts_embedding = nn.Embedding(self.time_num, args.time_dim)
@@ -224,7 +220,7 @@ class LGDE(nn.Module):
         self.node_emb_layer = nn.Parameter(torch.empty(args.num_nodes, args.node_dim))
         nn.init.xavier_uniform_(self.node_emb_layer)
 
-        self.input_emb_layer = nn.Conv2d(55, args.hid_dim, kernel_size=(1, 1), bias=True)
+        self.input_emb_layer = nn.Conv2d(args.input_emb_dim, args.hid_dim, kernel_size=(1, 1), bias=True)
         self.hidden_size = args.hid_dim
 
         # time embedding layer
@@ -246,10 +242,9 @@ class LGDE(nn.Module):
                                 self.dropout, self.tau, self.random_feature_dim))
             self.bn.append(nn.LayerNorm((self.hidden_size + args.time_dim) * 2 + args.node_dim))
 
-        # self.output_layer = nn.Conv2d(args.hid_dim * 2, 35, kernel_size=(1, 1), bias=True)
-        self.output_layer = nn.Linear(args.hid_dim * 2, 35, bias=True)
+        self.output_layer = nn.Linear(args.hid_dim * 2, args.dist_dim, bias=True)
         self.mean_emb = nn.Linear(5, args.hid_dim)
-        self.dist_emb = nn.Linear(35 * 5, args.hid_dim)
+        self.dist_emb = nn.Linear(args.dist_dim * 5, args.hid_dim)
 
         self.kl_loss_fn = torch.nn.KLDivLoss(reduction='batchmean')
         self.mae_loss_fn = torch.nn.L1Loss()
@@ -261,7 +256,7 @@ class LGDE(nn.Module):
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # shape: [35]
         self.input_fc =  nn.Linear((self.hidden_size + args.time_dim) * 2 + args.node_dim, args.hid_dim , bias=True)
         self.bin_centers = torch.tensor(bin_centers, dtype=torch.float32)  # [35]
-        self.last_interval_linear = nn.Linear(35, 35)
+        self.last_interval_linear = nn.Linear(args.dist_dim, args.dist_dim)
         self.layer_num = 1
         self.transformer_layer = nn.ModuleList()
         self.bn = nn.ModuleList()
@@ -271,7 +266,6 @@ class LGDE(nn.Module):
             self.bn.append(nn.LayerNorm(args.hid_dim))
 
     def forward(self, input, input_d_ts, label_dist, device):
-        # input: (B, N, D)
         input = input[:, :, :-1, :].clone()
         B, N, D_t, H_t = input.size()
         label_dist = label_dist.to(device)
@@ -304,8 +298,7 @@ class LGDE(nn.Module):
         x = self.activation(x)  # (B, dim*4, N, 1)
 
         x = self.output_layer(x)  # (B, N, out_dim)
-        # x = x.squeeze(-1).permute(0, 2, 1).contiguous()
-        predicted_probs = F.softmax(x, dim=-1) # 和均值对应分布加权平均
+        predicted_probs = F.softmax(x, dim=-1)
         dist_last_interval = mean_to_distribution(input[:, :, 2, -1].reshape(-1, 1)).to(device)
         dist_last_interval = self.last_interval_linear(dist_last_interval)
         predicted_probs = 0.5 * predicted_probs.reshape(B*N, -1) + (0.5) * dist_last_interval
@@ -320,10 +313,6 @@ class LGDE(nn.Module):
         log_predicted_probs_flat = log_predicted_probs.reshape(-1, predicted_probs.size(-1))
         true_distribution_flat = true_distribution_smooth.reshape(-1, predicted_probs.size(-1))
         loss_kl = self.kl_loss_fn(log_predicted_probs_flat, true_distribution_flat)
-
-        """
-        KLDiv, and mean
-        """
         label_mean = label_dist[:, :, -1]
         predicted_mean = torch.matmul(predicted_probs.reshape(B * N, -1), self.bin_centers.unsqueeze(1).to(device))
         loss_mae = self.mae_loss_fn(predicted_mean.reshape(B * N), label_mean.reshape(B * N))
