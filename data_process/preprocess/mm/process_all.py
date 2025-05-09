@@ -27,8 +27,8 @@ def get_workspace():
 ws =  get_workspace()
 sys.path.append(ws)
 
-from loader.preprocess.mm.fetch_rdnet import fetch_map, build_map
-from loader.preprocess.mm.mapmatching import process_gps_and_graph, process_gps_and_graph_WTR
+from data_process.preprocess.mm.fetch_rdnet import fetch_map, build_map
+from data_process.preprocess.mm.mapmatching import process_gps_and_graph, process_gps_and_graph_WTR
 
 
 
